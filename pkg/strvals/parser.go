@@ -115,6 +115,19 @@ func ParseJSON(s string, dest map[string]any) error {
 	return t.parse()
 }
 
+// ParseJSONIntoMap parses a --set-json key=value line into a fresh map.
+//
+// It uses the same JSON parser as ParseJSON, returning the parsed map
+// separately so callers can observe which paths the assignment wrote without
+// changing the merge behaviour of ParseJSON itself.
+func ParseJSONIntoMap(s string) (map[string]any, error) {
+	vals := map[string]any{}
+	if err := ParseJSON(s, vals); err != nil {
+		return nil, err
+	}
+	return vals, nil
+}
+
 // ParseIntoFile parses a filevals line and merges the result into dest.
 //
 // This method always returns a string as the value.

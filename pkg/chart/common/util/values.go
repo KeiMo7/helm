@@ -21,6 +21,7 @@ import (
 
 	"helm.sh/helm/v4/pkg/chart"
 	"helm.sh/helm/v4/pkg/chart/common"
+	"helm.sh/helm/v4/pkg/valuetrace"
 )
 
 // ToRenderValues composes the struct from the data coming from the Releases, Charts and Values files
@@ -67,4 +68,44 @@ func ToRenderValuesWithSchemaValidation(chrt chart.Charter, chrtVals map[string]
 
 	top["Values"] = vals
 	return top, nil
+}
+
+// ToRenderValuesTraced mirrors ToRenderValuesWithSchemaValidation but also
+// returns the provenance trace built while coalescing.
+//
+// The render values are produced by the same CoalesceValues and schema
+// validation path, so enabling tracing changes nothing in the rendering
+// context. The trace is a separate return value.
+func ToRenderValuesTraced(chrt chart.Charter, chrtVals map[string]any, options common.ReleaseOptions, caps *common.Capabilities, tracer *valuetrace.Tracer) (common.Values, *valuetrace.Trace, error) {
+	if caps == nil {
+		caps = common.DefaultCapabilities
+	}
+	accessor, err := chart.NewAccessor(chrt)
+	if err != nil {
+		return nil, nil, err
+	}
+	top := map[string]any{
+		"Chart":        accessor.MetadataAsMap(),
+		"Capabilities": caps,
+		"Release": map[string]any{
+			"Name":      options.Name,
+			"Namespace": options.Namespace,
+			"IsUpgrade": options.IsUpgrade,
+			"IsInstall": options.IsInstall,
+			"Revision":  options.Revision,
+			"Service":   "Helm",
+		},
+	}
+
+	vals, trace, err := CoalesceValuesTraced(chrt, chrtVals, tracer)
+	if err != nil {
+		return common.Values(top), trace, err
+	}
+
+	if err := ValidateAgainstSchema(chrt, vals); err != nil {
+		return top, trace, fmt.Errorf("values don't meet the specifications of the schema(s) in the following chart(s):\n%w", err)
+	}
+
+	top["Values"] = vals
+	return top, trace, nil
 }

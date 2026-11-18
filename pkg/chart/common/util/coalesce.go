@@ -24,6 +24,7 @@ import (
 	"helm.sh/helm/v4/internal/copystructure"
 	chart "helm.sh/helm/v4/pkg/chart"
 	"helm.sh/helm/v4/pkg/chart/common"
+	"helm.sh/helm/v4/pkg/valuetrace"
 )
 
 func concatPrefix(a, b string) string {
@@ -48,6 +49,41 @@ func CoalesceValues(chrt chart.Charter, vals map[string]any) (common.Values, err
 		return vals, err
 	}
 	return coalesce(log.Printf, chrt, valsCopy, "", false)
+}
+
+// CoalesceValuesTraced mirrors CoalesceValues and additionally finalizes the
+// provenance trace started while merging CLI supplied values.
+//
+// The coalesced values come from the unchanged CoalesceValues call, so the
+// merge result is identical. The tracer only observes the chart tree to
+// attribute leaves that came from values.yaml defaults. Tracing failures are
+// degraded to warnings inside the trace and never alter the returned values.
+func CoalesceValuesTraced(chrt chart.Charter, vals map[string]any, tracer *valuetrace.Tracer) (common.Values, *valuetrace.Trace, error) {
+	coalesced, err := CoalesceValues(chrt, vals)
+	if err != nil {
+		return coalesced, nil, err
+	}
+	if tracer == nil {
+		return coalesced, nil, nil
+	}
+	// The root chart's values.yaml is the parent-values layer relative to
+	// user supplied overrides.
+	tracer.RecordParentDefaults(rootChartDefaults(chrt))
+	trace := tracer.Snapshot(chrt, vals, coalesced)
+	return coalesced, trace, nil
+}
+
+// rootChartDefaults returns the root chart's raw values.yaml block.
+func rootChartDefaults(chrt chart.Charter) map[string]any {
+	accessor, err := chart.NewAccessor(chrt)
+	if err != nil {
+		return map[string]any{}
+	}
+	defaults := accessor.Values()
+	if defaults == nil {
+		return map[string]any{}
+	}
+	return defaults
 }
 
 // MergeValues is used to merge the values in a chart and its subcharts. This
