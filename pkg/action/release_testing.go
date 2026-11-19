@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"io"
 	"slices"
-	"sort"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
@@ -33,6 +32,7 @@ import (
 	"helm.sh/helm/v4/pkg/kube"
 	ri "helm.sh/helm/v4/pkg/release"
 	release "helm.sh/helm/v4/pkg/release/v1"
+	releaseutil "helm.sh/helm/v4/pkg/release/v1/util"
 )
 
 const (
@@ -127,7 +127,7 @@ func (r *ReleaseTesting) GetPodLogs(out io.Writer, rel *release.Release) error {
 	}
 
 	hooksByWeight := append([]*release.Hook{}, rel.Hooks...)
-	sort.Stable(hookByWeight(hooksByWeight))
+	releaseutil.SortHooksByWeight(hooksByWeight)
 	for _, h := range hooksByWeight {
 		for _, e := range h.Events {
 			if e == release.HookTest {

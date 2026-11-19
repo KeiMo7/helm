@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"log"
 	"slices"
-	"sort"
 	"time"
 
 	"helm.sh/helm/v4/pkg/kube"
@@ -29,6 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	release "helm.sh/helm/v4/pkg/release/v1"
+	releaseutil "helm.sh/helm/v4/pkg/release/v1/util"
 )
 
 // execHook executes all of the hooks for the given hook event.
@@ -70,8 +70,8 @@ func (cfg *Configuration) execHookWithDelayedShutdown(rl *release.Release, hook 
 		}
 	}
 
-	// hooke are pre-ordered by kind, so keep order stable
-	sort.Stable(hookByWeight(executingHooks))
+	// hooks are pre-ordered by kind, so keep order stable
+	releaseutil.SortHooksByWeight(executingHooks)
 
 	for i, h := range executingHooks {
 		// Set default delete policy to before-hook-creation
@@ -162,18 +162,6 @@ func (cfg *Configuration) execHookWithDelayedShutdown(rl *release.Release, hook 
 		}
 		return nil
 	}, nil
-}
-
-// hookByWeight is a sorter for hooks
-type hookByWeight []*release.Hook
-
-func (x hookByWeight) Len() int      { return len(x) }
-func (x hookByWeight) Swap(i, j int) { x[i], x[j] = x[j], x[i] }
-func (x hookByWeight) Less(i, j int) bool {
-	if x[i].Weight == x[j].Weight {
-		return x[i].Name < x[j].Name
-	}
-	return x[i].Weight < x[j].Weight
 }
 
 // deleteHookByPolicy deletes a hook if the hook policy instructs it to
