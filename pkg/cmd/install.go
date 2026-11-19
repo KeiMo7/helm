@@ -174,6 +174,7 @@ func newInstallCmd(cfg *action.Configuration, out io.Writer) *cobra.Command {
 
 	f := cmd.Flags()
 	addInstallFlags(cmd, f, client, valueOpts)
+	addTemplateTraceFlags(f, cfg)
 	// hide-secret is not available in all places the install flags are used so
 	// it is added separately
 	f.BoolVar(&client.HideSecret, "hide-secret", false, "hide Kubernetes Secrets when also using the --dry-run flag")

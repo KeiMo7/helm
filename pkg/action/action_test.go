@@ -1897,6 +1897,49 @@ func TestRenderResources_PostRenderer_MergeError(t *testing.T) {
 	assert.ErrorContains(t, err, "error merging manifests")
 }
 
+func TestRenderResources_TemplateTraceInvalidYAML(t *testing.T) {
+	cfg := actionConfigFixture(t)
+	ch := &chart.Chart{
+		Metadata: &chart.Metadata{
+			APIVersion: "v1",
+			Name:       "trace",
+			Version:    "0.1.0",
+		},
+		Templates: []*common.File{
+			{Name: "templates/deploy.yaml", ModTime: time.Now(), Data: []byte("{{ include \"trace.manifest\" . }}\n")},
+			{Name: "templates/_helpers.tpl", ModTime: time.Now(), Data: []byte(`{{- define "trace.manifest" -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trace
+data:
+  broken: [unclosed
+{{- end -}}`)},
+		},
+	}
+
+	_, _, _, err := cfg.renderResources(
+		t.Context(), ch, map[string]any{}, "test-release", "", false, false, false,
+		nil, false, false, false, PostRenderStrategyCombined,
+	)
+	require.Error(t, err)
+	withoutTrace := err.Error()
+	require.NotContains(t, withoutTrace, "Template trace:")
+
+	cfg.TemplateTrace = []string{"trace/templates/deploy.yaml"}
+	_, _, _, err = cfg.renderResources(
+		t.Context(), ch, map[string]any{}, "test-release", "", false, false, false,
+		nil, false, false, false, PostRenderStrategyCombined,
+	)
+	require.Error(t, err)
+	withTrace := err.Error()
+
+	assert.True(t, strings.HasPrefix(withTrace, withoutTrace), "template trace must only append to the existing error")
+	assert.Contains(t, withTrace, "Template trace:")
+	assert.Contains(t, withTrace, `include "trace.manifest": trace/templates/deploy.yaml:1:`)
+	assert.Contains(t, withTrace, "YAML error: trace/templates/_helpers.tpl:")
+}
+
 func TestRenderResources_PostRenderer_SplitError(t *testing.T) {
 	cfg := actionConfigFixture(t)
 

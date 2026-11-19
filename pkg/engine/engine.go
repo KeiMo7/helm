@@ -48,6 +48,9 @@ type Engine struct {
 	EnableDNS bool
 	// CustomTemplateFuncs is defined by users to provide custom template funcs
 	CustomTemplateFuncs template.FuncMap
+	// TemplateTrace enables opt-in call-chain and source-location tracing for
+	// selected templates. Disabled by default.
+	TemplateTrace *TraceOptions
 }
 
 // New creates a new instance of Engine using the passed in rest config.
@@ -107,8 +110,16 @@ func (e Engine) Render(chrt ci.Charter, values common.Values) (map[string]string
 //
 // TODO Helm v5: Rename this to Render (remove the current deprecated Render method) and 'go:fix inline' RenderWithContext method to call Render.
 func (e Engine) RenderWithContext(ctx context.Context, chrt ci.Charter, values common.Values) (map[string]string, error) {
+	rendered, _, err := e.RenderWithContextTrace(ctx, chrt, values)
+	return rendered, err
+}
+
+// RenderWithContextTrace takes a chart, optional values, and value overrides,
+// and attempts to render the Go templates. It also returns source information
+// for rendered templates selected by Engine.TemplateTrace.
+func (e Engine) RenderWithContextTrace(ctx context.Context, chrt ci.Charter, values common.Values) (map[string]string, *RenderTrace, error) {
 	tmap := allTemplates(chrt, values)
-	return e.render(ctx, tmap)
+	return e.renderWithTrace(ctx, tmap)
 }
 
 // Render takes a chart, optional values, and value overrides, and attempts to
@@ -298,7 +309,12 @@ func (e Engine) initFunMap(ctx context.Context, t *template.Template) {
 }
 
 // render takes a map of templates/values and renders them.
-func (e Engine) render(ctx context.Context, tpls map[string]renderable) (rendered map[string]string, err error) {
+func (e Engine) render(ctx context.Context, tpls map[string]renderable) (map[string]string, error) {
+	rendered, _, err := e.renderWithTrace(ctx, tpls)
+	return rendered, err
+}
+
+func (e Engine) renderWithTrace(ctx context.Context, tpls map[string]renderable) (rendered map[string]string, renderTrace *RenderTrace, err error) {
 	// Basically, what we do here is start with an empty parent template and then
 	// build up a list of templates -- one for each file. Once all of the templates
 	// have been parsed, we loop through again and execute every template.
@@ -311,6 +327,9 @@ func (e Engine) render(ctx context.Context, tpls map[string]renderable) (rendere
 			err = fmt.Errorf("rendering template failed: %v", r)
 		}
 	}()
+	tracePlan := newTracePlan(e.TemplateTrace, tpls)
+	renderTrace = newRenderTrace(tracePlan, tpls)
+
 	t := template.New("gotpl")
 	if e.Strict {
 		t.Option("missingkey=error")
@@ -329,7 +348,7 @@ func (e Engine) render(ctx context.Context, tpls map[string]renderable) (rendere
 	for _, filename := range keys {
 		r := tpls[filename]
 		if _, err := t.New(filename).Parse(r.tpl); err != nil {
-			return map[string]string{}, cleanupParseError(filename, err)
+			return map[string]string{}, renderTrace, cleanupParseError(filename, err)
 		}
 	}
 
@@ -344,8 +363,14 @@ func (e Engine) render(ctx context.Context, tpls map[string]renderable) (rendere
 		vals := tpls[filename].vals
 		vals["Template"] = common.Values{"Name": filename, "BasePath": tpls[filename].basePath}
 		var buf strings.Builder
+		traced := tracePlan != nil && tracePlan.roots[filename]
 		if err := t.ExecuteTemplate(&buf, filename, vals); err != nil {
-			return map[string]string{}, reformatExecErrorMsg(filename, err)
+			formatted := reformatExecErrorMsg(filename, err)
+			if traced {
+				formatted = appendExecutionTrace(formatted, filename, err, tracePlan.maxDepth)
+				formatted = errors.New(redactTemplateArguments(formatted.Error()))
+			}
+			return map[string]string{}, renderTrace, formatted
 		}
 
 		// Work around the issue where Go will emit "<no value>" even if Options(missing=zero)
@@ -354,7 +379,7 @@ func (e Engine) render(ctx context.Context, tpls map[string]renderable) (rendere
 		rendered[filename] = strings.ReplaceAll(buf.String(), "<no value>", "")
 	}
 
-	return rendered, nil
+	return rendered, renderTrace, nil
 }
 
 func cleanupParseError(filename string, err error) error {
@@ -372,9 +397,11 @@ func cleanupParseError(filename string, err error) error {
 }
 
 type TraceableError struct {
-	location         string
-	message          string
-	executedFunction string
+	location          string
+	message           string
+	executedFunction  string
+	executingTemplate string
+	expression        string
 }
 
 func (t TraceableError) String() string {
@@ -478,10 +505,13 @@ func parseTemplateExecutingAtErrorType(remainder string) (TraceableError, bool) 
 		if cut := strings.Index(errMsg, " template:"); cut != -1 {
 			errMsg = errMsg[:cut]
 		}
+		executingTemplate := after[1:endQuote]
 		return TraceableError{
-			location:         templateName,
-			message:          errMsg,
-			executedFunction: "executing \"" + functionName + "\" at <" + locationName + ">:",
+			location:          templateName,
+			message:           errMsg,
+			executedFunction:  "executing \"" + functionName + "\" at <" + locationName + ">:",
+			executingTemplate: executingTemplate,
+			expression:        locationName,
 		}, true
 	}
 	return TraceableError{}, false

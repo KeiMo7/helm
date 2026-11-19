@@ -136,6 +136,11 @@ func addChartPathOptionsFlags(f *pflag.FlagSet, c *action.ChartPathOptions) {
 	f.BoolVar(&c.PassCredentialsAll, "pass-credentials", false, "pass credentials to all domains")
 }
 
+func addTemplateTraceFlags(f *pflag.FlagSet, cfg *action.Configuration) {
+	f.StringArrayVar(&cfg.TemplateTrace, "template-trace", cfg.TemplateTrace, "enable template error call-chain tracing for the named templates or glob patterns (can specify multiple)")
+	f.IntVar(&cfg.TemplateTraceMaxDepth, "template-trace-depth", cfg.TemplateTraceMaxDepth, "maximum number of frames to include in a template trace")
+}
+
 // bindOutputFlag will add the output flag to the given command and bind the
 // value to the given format pointer
 func bindOutputFlag(cmd *cobra.Command, varRef *output.Format) {

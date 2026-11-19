@@ -309,6 +309,7 @@ func newUpgradeCmd(cfg *action.Configuration, out io.Writer) *cobra.Command {
 	f.BoolVar(&client.TakeOwnership, "take-ownership", false, "if set, upgrade will ignore the check for helm annotations and take ownership of the existing resources")
 	addDryRunFlag(cmd)
 	addChartPathOptionsFlags(f, &client.ChartPathOptions)
+	addTemplateTraceFlags(f, cfg)
 	addValueOptionsFlags(f, valueOpts)
 	bindOutputFlag(cmd, &outfmt)
 	bindPostRenderFlag(cmd, &client.PostRenderer, settings)

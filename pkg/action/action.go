@@ -136,6 +136,13 @@ type Configuration struct {
 	// CustomTemplateFuncs is defined by users to provide custom template funcs
 	CustomTemplateFuncs template.FuncMap
 
+	// TemplateTrace enables opt-in template error tracing for the selected
+	// template names or glob patterns.
+	TemplateTrace []string
+
+	// TemplateTraceMaxDepth limits the number of trace frames emitted.
+	TemplateTraceMaxDepth int
+
 	// HookOutputFunc called with container name and returns and expects writer that will receive the log output.
 	HookOutputFunc func(namespace, pod, container string) io.Writer
 
@@ -293,6 +300,14 @@ func (cfg *Configuration) renderResources(ctx context.Context, ch *chart.Chart, 
 
 	var files map[string]string
 	var err2 error
+	var renderTrace *engine.RenderTrace
+	var traceOptions *engine.TraceOptions
+	if len(cfg.TemplateTrace) > 0 {
+		traceOptions = &engine.TraceOptions{
+			Templates: cfg.TemplateTrace,
+			MaxDepth:  cfg.TemplateTraceMaxDepth,
+		}
+	}
 
 	// A `helm template` should not talk to the remote cluster. However, commands with the flag
 	// `--dry-run` with the value of `false`, `none`, or `server` should try to interact with the cluster.
@@ -305,14 +320,16 @@ func (cfg *Configuration) renderResources(ctx context.Context, ch *chart.Chart, 
 		e := engine.New(restConfig)
 		e.EnableDNS = enableDNS
 		e.CustomTemplateFuncs = cfg.CustomTemplateFuncs
+		e.TemplateTrace = traceOptions
 
-		files, err2 = e.RenderWithContext(ctx, ch, values)
+		files, renderTrace, err2 = e.RenderWithContextTrace(ctx, ch, values)
 	} else {
 		var e engine.Engine
 		e.EnableDNS = enableDNS
 		e.CustomTemplateFuncs = cfg.CustomTemplateFuncs
+		e.TemplateTrace = traceOptions
 
-		files, err2 = e.RenderWithContext(ctx, ch, values)
+		files, renderTrace, err2 = e.RenderWithContextTrace(ctx, ch, values)
 	}
 
 	if err2 != nil {
@@ -351,6 +368,7 @@ func (cfg *Configuration) renderResources(ctx context.Context, ch *chart.Chart, 
 			// Helm 3 behavior.
 			sortedHooks, sortedManifests, err := releaseutil.SortManifests(files, nil, releaseutil.InstallOrder)
 			if err != nil {
+				err = renderTrace.AnnotateYAMLParseError(err, files)
 				for name, content := range files {
 					if strings.TrimSpace(content) == "" {
 						continue
@@ -418,7 +436,7 @@ func (cfg *Configuration) renderResources(ctx context.Context, ch *chart.Chart, 
 
 				rendered, err := splitAndDeannotate(postRendered.String(), group.name)
 				if err != nil {
-					return hs, b, notes, fmt.Errorf("error while parsing post rendered output for %s: %w", group.name, err)
+					return hs, b, notes, renderTrace.AnnotateUnknownYAML(fmt.Errorf("error while parsing post rendered output for %s: %w", group.name, err))
 				}
 
 				for k, v := range rendered {
@@ -440,7 +458,7 @@ func (cfg *Configuration) renderResources(ctx context.Context, ch *chart.Chart, 
 			// Merge files as stream of documents for sending to post renderer
 			merged, err := annotateAndMerge(files)
 			if err != nil {
-				return hs, b, notes, fmt.Errorf("error merging manifests: %w", err)
+				return hs, b, notes, renderTrace.AnnotateYAMLParseError(fmt.Errorf("error merging manifests: %w", err), files)
 			}
 
 			// Run the post renderer
@@ -452,7 +470,7 @@ func (cfg *Configuration) renderResources(ctx context.Context, ch *chart.Chart, 
 			// Use the file list and contents received from the post renderer
 			files, err = splitAndDeannotate(postRendered.String(), "")
 			if err != nil {
-				return hs, b, notes, fmt.Errorf("error while parsing post rendered output: %w", err)
+				return hs, b, notes, renderTrace.AnnotateUnknownYAML(fmt.Errorf("error while parsing post rendered output: %w", err))
 			}
 		default:
 			return hs, b, notes, fmt.Errorf("unknown post-render strategy: '%s'", postRenderStrategy)
@@ -464,6 +482,7 @@ func (cfg *Configuration) renderResources(ctx context.Context, ch *chart.Chart, 
 	// removed here.
 	hs, manifests, err := releaseutil.SortManifests(files, nil, releaseutil.InstallOrder)
 	if err != nil {
+		err = renderTrace.AnnotateYAMLParseError(err, files)
 		// By catching parse errors here, we can prevent bogus releases from going
 		// to Kubernetes.
 		//
