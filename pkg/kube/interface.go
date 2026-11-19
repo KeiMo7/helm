@@ -23,6 +23,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/cli-runtime/pkg/resource"
 )
 
 // Interface represents a client capable of communicating with the Kubernetes API.
@@ -75,6 +76,20 @@ type Interface interface {
 	// Validates against OpenAPI schema if validate is true.
 	// TODO Helm v5: Integrate into Build with an argument
 	BuildTable(reader io.Reader, validate bool) (ResourceList, error)
+}
+
+// ReadOnlyInterface contains the subset of Kubernetes operations needed to
+// build and compare resources without mutating the cluster.
+type ReadOnlyInterface interface {
+	Get(resources ResourceList, related bool) (map[string][]runtime.Object, error)
+	Build(reader io.Reader, validate bool) (ResourceList, error)
+	IsReachable() error
+}
+
+// ObjectGetter is implemented by clients that can return a single object and
+// preserve read errors such as "not found" and authorization failures.
+type ObjectGetter interface {
+	GetResource(info *resource.Info) (runtime.Object, error)
 }
 
 // Waiter defines methods related to waiting for resource states.

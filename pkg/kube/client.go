@@ -512,6 +512,13 @@ func getResource(info *resource.Info) (runtime.Object, error) {
 	return obj, nil
 }
 
+// GetResource retrieves one resource and preserves read errors for callers
+// that need to distinguish not-found from authorization or connectivity
+// failures.
+func (c *Client) GetResource(info *resource.Info) (runtime.Object, error) {
+	return getResource(info)
+}
+
 func (c *Client) namespace() string {
 	if c.Namespace != "" {
 		return c.Namespace

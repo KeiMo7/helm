@@ -80,6 +80,12 @@ or '--set' flags. Priority is given to new values.
 The --dry-run flag will output all generated chart manifests, including Secrets
 which can contain sensitive values. To hide Kubernetes Secrets use the
 --hide-secret flag. Please carefully consider how and when these flags are used.
+
+The --preview flag performs a read-only upgrade preview. It renders the proposed
+release, reads the matching objects from the cluster, and reports added, updated,
+and deleted resources with manifest-aligned field paths. It never writes to the
+cluster. Use --preview-summary for summary-only output, and --output to select
+table, JSON, or YAML output.
 `
 
 func newUpgradeCmd(cfg *action.Configuration, out io.Writer) *cobra.Command {
@@ -257,6 +263,13 @@ func newUpgradeCmd(cfg *action.Configuration, out io.Writer) *cobra.Command {
 				cancel()
 			}()
 
+			if client.Preview {
+				preview, err := client.RunPreviewWithContext(ctx, args[0], ch, vals)
+				if err != nil {
+					return fmt.Errorf("UPGRADE PREVIEW FAILED: %w", err)
+				}
+				return outfmt.Write(out, &upgradePreviewWriter{preview: preview})
+			}
 			rel, err := client.RunWithContext(ctx, args[0], ch, vals)
 			if err != nil {
 				return fmt.Errorf("UPGRADE FAILED: %w", err)
@@ -280,7 +293,11 @@ func newUpgradeCmd(cfg *action.Configuration, out io.Writer) *cobra.Command {
 	f.BoolVar(&createNamespace, "create-namespace", false, "if --install is set, create the release namespace if not present")
 	f.BoolVarP(&client.Install, "install", "i", false, "if a release by this name doesn't already exist, run an install")
 	f.BoolVar(&client.Devel, "devel", false, "use development versions, too. Equivalent to version '>0.0.0-0'. If --version is set, this is ignored")
-	f.BoolVar(&client.HideSecret, "hide-secret", false, "hide Kubernetes Secrets when also using the --dry-run flag")
+	f.BoolVar(&client.HideSecret, "hide-secret", false, "hide Kubernetes Secrets when also using the --dry-run or --preview flag")
+	f.BoolVar(&client.Preview, "preview", false, "perform a read-only upgrade preview and report resource and field differences")
+	f.BoolVar(&client.PreviewSummary, "preview-summary", false, "only print the preview summary")
+	f.IntVar(&client.PreviewLimit, "preview-limit", action.DefaultPreviewLimit, "maximum number of detailed resources in preview output")
+	f.IntVar(&client.PreviewFieldLimit, "preview-field-limit", action.DefaultPreviewFieldLimit, "maximum number of field differences shown per resource in preview output")
 	f.BoolVar(&client.ForceReplace, "force-replace", false, "force resource updates by replacement")
 	f.BoolVar(&client.ForceReplace, "force", false, "deprecated")
 	f.MarkDeprecated("force", "use --force-replace instead")
@@ -315,6 +332,7 @@ func newUpgradeCmd(cfg *action.Configuration, out io.Writer) *cobra.Command {
 	AddWaitFlag(cmd, &client.WaitStrategy)
 	cmd.MarkFlagsMutuallyExclusive("force-replace", "force-conflicts")
 	cmd.MarkFlagsMutuallyExclusive("force", "force-conflicts")
+	cmd.MarkFlagsMutuallyExclusive("preview", "install")
 
 	err := cmd.RegisterFlagCompletionFunc("version", func(_ *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		if len(args) != 2 {

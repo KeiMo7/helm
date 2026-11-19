@@ -80,6 +80,15 @@ type Upgrade struct {
 	DisableHooks bool
 	// DryRunStrategy can be set to prepare, but not execute the operation and whether or not to interact with the remote cluster
 	DryRunStrategy DryRunStrategy
+	// Preview enables a read-only comparison of the rendered manifests with
+	// the current cluster objects.
+	Preview bool
+	// PreviewSummary limits preview output to the summary.
+	PreviewSummary bool
+	// PreviewLimit is the maximum number of detailed resource diffs to retain.
+	PreviewLimit int
+	// PreviewFieldLimit is the maximum number of field diffs retained per resource.
+	PreviewFieldLimit int
 	// HideSecret can be set to true when DryRun is enabled in order to hide
 	// Kubernetes Secrets in the output. It cannot be used outside of DryRun.
 	HideSecret bool
@@ -168,6 +177,9 @@ func (u *Upgrade) Run(name string, chart chart.Charter, vals map[string]any) (ri
 
 // RunWithContext executes the upgrade on the given release with context.
 func (u *Upgrade) RunWithContext(ctx context.Context, name string, ch chart.Charter, vals map[string]any) (ri.Releaser, error) {
+	if u.Preview {
+		return nil, errors.New("preview mode must be invoked with RunPreviewWithContext")
+	}
 	if err := u.cfg.KubeClient.IsReachable(); err != nil {
 		return nil, err
 	}
@@ -219,12 +231,16 @@ func (u *Upgrade) RunWithContext(ctx context.Context, name string, ch chart.Char
 
 // prepareUpgrade builds an upgraded release for an upgrade operation.
 func (u *Upgrade) prepareUpgrade(ctx context.Context, name string, chart *chartv2.Chart, vals map[string]any) (*release.Release, *release.Release, bool, error) {
+	return u.prepareUpgradeWithOptions(ctx, name, chart, vals, false)
+}
+
+func (u *Upgrade) prepareUpgradeWithOptions(ctx context.Context, name string, chart *chartv2.Chart, vals map[string]any, preview bool) (*release.Release, *release.Release, bool, error) {
 	if chart == nil {
 		return nil, nil, false, errMissingChart
 	}
 
 	// HideSecret must be used with dry run. Otherwise, return an error.
-	if !isDryRun(u.DryRunStrategy) && u.HideSecret {
+	if !isDryRun(u.DryRunStrategy) && !preview && u.HideSecret {
 		return nil, nil, false, errors.New("hiding Kubernetes secrets requires a dry-run mode")
 	}
 
@@ -299,7 +315,13 @@ func (u *Upgrade) prepareUpgrade(ctx context.Context, name string, chart *chartv
 		return nil, nil, false, err
 	}
 
-	hooks, manifestDoc, notesTxt, err := u.cfg.renderResources(ctx, chart, valuesToRender, "", "", u.SubNotes, false, false, u.PostRenderer, interactWithServer(u.DryRunStrategy), u.EnableDNS, u.HideSecret, u.PostRenderStrategy)
+	hideSecret := u.HideSecret
+	if preview {
+		// Preview needs the full Secret to compare it with the cluster. Output
+		// values are redacted after the comparison when --hide-secret is set.
+		hideSecret = false
+	}
+	hooks, manifestDoc, notesTxt, err := u.cfg.renderResources(ctx, chart, valuesToRender, "", "", u.SubNotes, false, false, u.PostRenderer, interactWithServer(u.DryRunStrategy), u.EnableDNS, hideSecret, u.PostRenderStrategy)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -337,7 +359,9 @@ func (u *Upgrade) prepareUpgrade(ctx context.Context, name string, chart *chartv
 	if notesTxt != "" {
 		upgradedRelease.Info.Notes = notesTxt
 	}
-	err = validateManifest(u.cfg.KubeClient, manifestDoc.Bytes(), !u.DisableOpenAPIValidation)
+	if !preview {
+		err = validateManifest(u.cfg.KubeClient, manifestDoc.Bytes(), !u.DisableOpenAPIValidation)
+	}
 	return currentRelease, upgradedRelease, serverSideApply, err
 }
 
